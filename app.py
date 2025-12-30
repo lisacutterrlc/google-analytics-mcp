@@ -1,3 +1,7 @@
+import os
+print("BOOT: app.py starting")
+print("BOOT: PORT=", os.environ.get("PORT"))
+
 import asyncio
 import os
 from mcp.server.fastmcp import FastMCP
