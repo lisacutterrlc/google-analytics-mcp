@@ -15,10 +15,10 @@ def ping() -> str:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
-    asyncio.run(
-        mcp.run_async(
-            transport="streamable-http",
-            host="0.0.0.0",
-            port=port,
-        )
+asyncio.run(
+    mcp.run_sse_async(
+        host="0.0.0.0",
+        port=port,
     )
+)
+
