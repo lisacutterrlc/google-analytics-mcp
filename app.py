@@ -1,35 +1,52 @@
 import os
+import uvicorn
 from mcp.server.fastmcp import FastMCP
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+# ---- BOOT LOGS ----
 print("BOOT: app.py starting")
-print("BOOT: PORT=", os.environ.get("PORT"))
+print("BOOT: PORT =", os.environ.get("PORT"))
 
-# Force FastMCP to bind where Cloud Run expects
+# ---- CONFIG ----
+PORT = int(os.environ.get("PORT", "8080"))
+
+# Ensure FastMCP knows the correct bind target
 os.environ["FASTMCP_HOST"] = "0.0.0.0"
-os.environ["FASTMCP_PORT"] = os.environ.get("PORT", "8080")
+os.environ["FASTMCP_PORT"] = str(PORT)
 
+# ---- MCP SERVER ----
 mcp = FastMCP("ga4-mcp-remote")
+
 
 @mcp.tool()
 def ping() -> str:
+    """Health check tool to confirm the MCP server is reachable."""
     return "pong"
 
+
+# ---- ENTRYPOINT ----
 if __name__ == "__main__":
-    import uvicorn
-
-    port = int(os.environ.get("PORT", "8080"))
-
-    # Try to get the ASGI app FastMCP exposes for Streamable HTTP
-    asgi_app = None
+    # Obtain the ASGI app exposed by FastMCP
     if hasattr(mcp, "streamable_http_app"):
-        asgi_app = mcp.streamable_http_app()  # common pattern
+        asgi_app = mcp.streamable_http_app()
     elif hasattr(mcp, "app"):
-        asgi_app = mcp.app  # fallback some versions expose
+        asgi_app = mcp.app
+    else:
+        raise RuntimeError(
+            "FastMCP does not expose an ASGI app via streamable_http_app() or app"
+        )
 
-    if asgi_app is None:
-        raise RuntimeError("Could not find an ASGI app on FastMCP instance (expected streamable_http_app() or app).")
+    # Allow Cloud Run / Google Frontend Host headers
+    asgi_app = TrustedHostMiddleware(asgi_app, allowed_hosts=["*"])
 
-    uvicorn.run(asgi_app, host="0.0.0.0", port=port)
+    # Start the server explicitly on Cloud Run's required interface
+    uvicorn.run(
+        asgi_app,
+        host="0.0.0.0",
+        port=PORT,
+        log_level="info",
+    )
+
 
 
 
