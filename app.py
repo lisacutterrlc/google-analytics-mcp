@@ -1,20 +1,16 @@
 import os
 import uvicorn
 from mcp.server.fastmcp import FastMCP
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-# ---- BOOT LOGS ----
 print("BOOT: app.py starting")
 print("BOOT: PORT =", os.environ.get("PORT"))
 
-# ---- CONFIG ----
 PORT = int(os.environ.get("PORT", "8080"))
 
-# Ensure FastMCP knows the correct bind target
-os.environ["FASTMCP_HOST"] = "0.0.0.0"
+# Ensure FastMCP sees Cloud Run's port
 os.environ["FASTMCP_PORT"] = str(PORT)
+os.environ["FASTMCP_HOST"] = "0.0.0.0"
 
-# ---- MCP SERVER ----
 mcp = FastMCP("ga4-mcp-remote")
 
 
@@ -24,9 +20,30 @@ def ping() -> str:
     return "pong"
 
 
-# ---- ENTRYPOINT ----
+class HostOverrideMiddleware:
+    """
+    Forces a stable Host header to avoid 'Invalid Host header' rejections
+    from inner frameworks/middleware that only allow localhost by default.
+    """
+    def __init__(self, app, host: str = "localhost"):
+        self.app = app
+        self.host = host.encode("latin-1")
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            headers = []
+            for k, v in scope.get("headers", []):
+                # Replace host header with localhost
+                if k.lower() == b"host":
+                    headers.append((b"host", self.host))
+                else:
+                    headers.append((k, v))
+            scope["headers"] = headers
+        await self.app(scope, receive, send)
+
+
 if __name__ == "__main__":
-    # Obtain the ASGI app exposed by FastMCP
+    # Get the ASGI app for Streamable HTTP
     if hasattr(mcp, "streamable_http_app"):
         asgi_app = mcp.streamable_http_app()
     elif hasattr(mcp, "app"):
@@ -36,19 +53,12 @@ if __name__ == "__main__":
             "FastMCP does not expose an ASGI app via streamable_http_app() or app"
         )
 
-    # Allow Cloud Run / Google Frontend Host headers
-    asgi_app = TrustedHostMiddleware(asgi_app, allowed_hosts=["*"])
+    # Override Host header to prevent 421 Invalid Host header
+    asgi_app = HostOverrideMiddleware(asgi_app, host="localhost")
 
-    # Start the server explicitly on Cloud Run's required interface
     uvicorn.run(
         asgi_app,
         host="0.0.0.0",
         port=PORT,
         log_level="info",
     )
-
-
-
-
-
-
