@@ -1,53 +1,31 @@
 import os
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 print("BOOT: app.py starting")
 print("BOOT: PORT =", os.environ.get("PORT"))
 
 PORT = int(os.environ.get("PORT", "8080"))
 
-# Give FastMCP the Cloud Run port (may or may not be honored by your version,
-# but leaving it doesn't hurt).
+# Cloud Run bind target
 os.environ["FASTMCP_PORT"] = str(PORT)
 os.environ["FASTMCP_HOST"] = "0.0.0.0"
 
-mcp = FastMCP("ga4-mcp-remote")
+mcp = FastMCP(
+    "ga4-mcp-remote",
+    transport_security=TransportSecuritySettings(
+        # This is what is currently causing your 421 "Invalid Host header"
+        # Disable it for now so Cloud Run host headers are accepted.
+        enable_dns_rebinding_protection=False
+    ),
+)
 
 
 @mcp.tool()
 def ping() -> str:
     """Health check tool to confirm the MCP server is reachable."""
     return "pong"
-
-
-class ForwardedHostOverrideMiddleware:
-    """
-    Cloud Run adds X-Forwarded-Host/Forwarded headers. Some frameworks validate
-    those and will return 'Invalid Host header'. This middleware forces a safe
-    host value for BOTH Host and X-Forwarded-Host and removes Forwarded.
-    """
-    def __init__(self, app, host: str = "localhost"):
-        self.app = app
-        self.host = host.encode("latin-1")
-
-    async def __call__(self, scope, receive, send):
-        if scope.get("type") == "http":
-            new_headers = []
-            for k, v in scope.get("headers", []):
-                lk = k.lower()
-                if lk == b"host":
-                    new_headers.append((b"host", self.host))
-                elif lk == b"x-forwarded-host":
-                    new_headers.append((b"x-forwarded-host", self.host))
-                elif lk == b"forwarded":
-                    # Drop it entirely to avoid host validation off Forwarded:
-                    continue
-                else:
-                    new_headers.append((k, v))
-            scope["headers"] = new_headers
-
-        await self.app(scope, receive, send)
 
 
 if __name__ == "__main__":
@@ -61,14 +39,9 @@ if __name__ == "__main__":
             "FastMCP does not expose an ASGI app via streamable_http_app() or app"
         )
 
-    # Override Host + X-Forwarded-Host (and strip Forwarded) to prevent 421
-    asgi_app = ForwardedHostOverrideMiddleware(asgi_app, host="localhost")
-
     uvicorn.run(
         asgi_app,
         host="0.0.0.0",
         port=PORT,
         log_level="info",
-        proxy_headers=True,
-        forwarded_allow_ips="*",
     )
